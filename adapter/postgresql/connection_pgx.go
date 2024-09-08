@@ -1,3 +1,4 @@
+//go:build !pq
 // +build !pq
 
 package postgresql
@@ -75,13 +76,13 @@ func (c ConnectionURL) String() (s string) {
 		c.Options = map[string]string{}
 	}
 
-	// If not present, SSL mode is assumed disabled.
+	// If not present, SSL mode is assumed "prefer".
 	if sslMode, ok := c.Options["sslmode"]; !ok || sslMode == "" {
-		c.Options["sslmode"] = "disable"
+		c.Options["sslmode"] = "prefer"
 	}
 
 	// Disabled by default
-	c.Options["statement_cache_capacity"] = "0"
+	c.Options["default_query_exec_mode"] = "cache_describe"
 
 	for k, v := range c.Options {
 		u = append(u, escaper.Replace(k)+"="+escaper.Replace(v))

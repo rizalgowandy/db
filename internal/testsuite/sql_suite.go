@@ -142,9 +142,6 @@ func (s *SQLTestSuite) TestPreparedStatementsCache() {
 	switch s.Adapter() {
 	case "ql":
 		limit = 1000
-	case "sqlite":
-		// TODO: We'll probably be able to workaround this with a mutex on inserts.
-		s.T().Skip(`Skipped due to a "database is locked" problem with concurrent transactions. See https://github.com/mattn/go-sqlite3/issues/274`)
 	}
 
 	for i := 0; i < limit; i++ {
@@ -1889,12 +1886,92 @@ func (s *SQLTestSuite) TestCustomType() {
 }
 
 func (s *SQLTestSuite) Test_Issue565() {
-	ctx, _ := context.WithTimeout(context.Background(), time.Nanosecond)
-	sess := s.Session().WithContext(ctx)
+	_, err := s.Session().Collection("birthdays").Insert(&birthday{
+		Name: "Lucy",
+		Born: time.Now(),
+	})
+	s.NoError(err)
 
-	var result birthday
-	err := sess.Collection("birthdays").Find().Select("name").One(&result)
+	ctxKeyCarry := db.ContextKey("carry")
 
-	s.Error(err)
-	s.Zero(result.Name)
+	parentCtx := context.WithValue(s.Session().Context(), ctxKeyCarry, 1)
+	s.NotZero(parentCtx.Value(ctxKeyCarry))
+
+	{
+		ctx, cancel := context.WithTimeout(parentCtx, time.Nanosecond)
+		defer cancel()
+
+		sess := s.Session()
+
+		sess = sess.WithContext(ctx)
+
+		var result birthday
+		err := sess.Collection("birthdays").Find().Select("name").One(&result)
+
+		s.Error(err)
+		s.Zero(result.Name)
+
+		s.NotZero(ctx.Value(ctxKeyCarry))
+	}
+
+	{
+		ctx, cancel := context.WithTimeout(parentCtx, time.Second*10)
+		cancel() // cancel before passing
+
+		sess := s.Session().WithContext(ctx)
+
+		var result birthday
+		err := sess.Collection("birthdays").Find().Select("name").One(&result)
+
+		s.Error(err)
+		s.Zero(result.Name)
+
+		s.NotZero(ctx.Value(ctxKeyCarry))
+	}
+
+	{
+		ctx, cancel := context.WithTimeout(parentCtx, time.Second)
+		defer cancel()
+
+		sess := s.Session().WithContext(ctx)
+
+		var result birthday
+		err := sess.Collection("birthdays").Find().Select("name").One(&result)
+
+		s.NoError(err)
+		s.NotZero(result.Name)
+
+		s.NotZero(ctx.Value(ctxKeyCarry))
+	}
+}
+
+func (s *SQLTestSuite) TestSelectFromSubquery() {
+	sess := s.Session()
+
+	{
+		var artists []artistType
+		q := sess.SQL().SelectFrom(
+			sess.SQL().SelectFrom("artist").Where(db.Cond{
+				"name": db.IsNotNull(),
+			}),
+		).As("_q")
+		err := q.All(&artists)
+		s.NoError(err)
+
+		s.NotZero(len(artists))
+	}
+
+	{
+		var artists []artistType
+		q := sess.SQL().SelectFrom(
+			sess.Collection("artist").Find(db.Cond{
+				"name": db.IsNotNull(),
+			}),
+		).As("_q")
+		err := q.All(&artists)
+		s.NoError(err)
+
+		s.NotZero(len(artists))
+	}
+
 }

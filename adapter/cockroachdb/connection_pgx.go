@@ -1,3 +1,4 @@
+//go:build !pq
 // +build !pq
 
 // Copyright (c) 2012-present The upper.io/db authors. All rights reserved.
@@ -48,14 +49,14 @@ func (c ConnectionURL) String() (s string) {
 			if host == "" {
 				host = "127.0.0.1"
 			}
-			if port == "" {
-				port = "5432"
-			}
 			u = append(u, "host="+escaper.Replace(host))
-			u = append(u, "port="+escaper.Replace(port))
 		} else {
 			u = append(u, "host="+escaper.Replace(c.Host))
 		}
+		if port == "" {
+			port = "26257"
+		}
+		u = append(u, "port="+escaper.Replace(port))
 	}
 
 	if c.Socket != "" {
@@ -75,13 +76,12 @@ func (c ConnectionURL) String() (s string) {
 		c.Options = map[string]string{}
 	}
 
-	// If not present, SSL mode is assumed disabled.
+	// If not present, SSL mode is assumed "prefer".
 	if sslMode, ok := c.Options["sslmode"]; !ok || sslMode == "" {
-		c.Options["sslmode"] = "disable"
+		c.Options["sslmode"] = "prefer"
 	}
 
-	// Disabled by default
-	c.Options["statement_cache_capacity"] = "0"
+	c.Options["default_query_exec_mode"] = "cache_describe"
 
 	for k, v := range c.Options {
 		u = append(u, escaper.Replace(k)+"="+escaper.Replace(v))

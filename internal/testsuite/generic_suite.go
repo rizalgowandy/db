@@ -133,6 +133,7 @@ func (s *GenericTestSuite) TestDatesAndUnicode() {
 	sess := s.Session()
 
 	testTimeZone := time.Local
+
 	switch s.Adapter() {
 	case "mysql", "cockroachdb", "postgresql":
 		testTimeZone = defaultTimeLocation
@@ -308,10 +309,10 @@ func (s *GenericTestSuite) TestFibonacci() {
 	s.Equal(uint64(4), total)
 
 	// Skipping.
-	res = res.Offset(1).Limit(2)
+	resWithLimit := res.Offset(1).Limit(2)
 
 	var item2 fibonacci
-	for res.Next(&item2) {
+	for resWithLimit.Next(&item2) {
 		switch item2.Input {
 		case 5:
 		case 6:
@@ -320,7 +321,7 @@ func (s *GenericTestSuite) TestFibonacci() {
 			s.T().Errorf(`Unexpected item: %v.`, item2)
 		}
 	}
-	err = res.Err()
+	err = resWithLimit.Err()
 	s.NoError(err)
 
 	err = res.Delete()
@@ -647,7 +648,6 @@ func (s *GenericTestSuite) TestComparisonOperators() {
 			s.True(item.Born.After(ref))
 		}
 	}
-	return
 
 	// Test: less than
 	{

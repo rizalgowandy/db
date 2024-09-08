@@ -251,12 +251,17 @@ func TestTemplateDelete(t *testing.T) {
 	assert := assert.New(t)
 
 	assert.Equal(
-		`DELETE FROM "artist" WHERE (name = $1)`,
+		`DELETE FROM "artist" WHERE (name = $1) LIMIT 1`,
 		b.DeleteFrom("artist").Where("name = ?", "Chavela Vargas").Limit(1).String(),
 	)
 
 	assert.Equal(
 		`DELETE FROM "artist" WHERE (id > 5)`,
 		b.DeleteFrom("artist").Where("id > 5").String(),
+	)
+
+	assert.Equal(
+		`DELETE FROM "artist" WHERE (id > 5) LIMIT 10`,
+		b.DeleteFrom("artist").Where("id > 5").Limit(10).String(),
 	)
 }

@@ -194,6 +194,8 @@ func (h *Helper) TearUp() error {
 			, integer_array integer[]
 			, string_array text[]
 			, jsonb_map jsonb
+			, raw_jsonb_map jsonb
+			, raw_jsonb_text jsonb
 
 			, integer_array_ptr integer[]
 			, string_array_ptr text[]
@@ -237,7 +239,7 @@ func (h *Helper) TearUp() error {
 			, decimal_value_ptr decimal
 
 			, uuid_value_string UUID
-
+			, ip_addr_ptr inet null
 		)`,
 
 		`DROP TABLE IF EXISTS issue_370`,

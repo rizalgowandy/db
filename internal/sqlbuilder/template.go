@@ -21,7 +21,7 @@ func newTemplateWithUtils(template *exql.Template) *templateWithUtils {
 func (tu *templateWithUtils) PlaceholderValue(in interface{}) (exql.Fragment, []interface{}) {
 	switch t := in.(type) {
 	case *adapter.RawExpr:
-		return exql.RawValue(t.Raw()), t.Arguments()
+		return &exql.Raw{Value: t.Raw()}, t.Arguments()
 	case *adapter.FuncExpr:
 		fnName := t.Name()
 		fnArgs := []interface{}{}
@@ -35,7 +35,7 @@ func (tu *templateWithUtils) PlaceholderValue(in interface{}) (exql.Fragment, []
 				fnArgs = append(fnArgs, args...)
 			}
 		}
-		return exql.RawValue(fnName + `(` + strings.Join(fragments, `, `) + `)`), fnArgs
+		return &exql.Raw{Value: fnName + `(` + strings.Join(fragments, `, `) + `)`}, fnArgs
 	default:
 		return sqlPlaceholder, []interface{}{in}
 	}
@@ -51,7 +51,7 @@ func (tu *templateWithUtils) toWhereWithArguments(term interface{}) (where exql.
 			if s, ok := t[0].(string); ok {
 				if strings.ContainsAny(s, "?") || len(t) == 1 {
 					s, args = Preprocess(s, t[1:])
-					where.Conditions = []exql.Fragment{exql.RawValue(s)}
+					where.Conditions = []exql.Fragment{&exql.Raw{Value: s}}
 				} else {
 					var val interface{}
 					key := s
@@ -62,9 +62,7 @@ func (tu *templateWithUtils) toWhereWithArguments(term interface{}) (where exql.
 					}
 					cv, v := tu.toColumnValues(adapter.NewConstraint(key, val))
 					args = append(args, v...)
-					for i := range cv.ColumnValues {
-						where.Conditions = append(where.Conditions, cv.ColumnValues[i])
-					}
+					where.Conditions = append(where.Conditions, cv.ColumnValues...)
 				}
 				return
 			}
@@ -80,7 +78,7 @@ func (tu *templateWithUtils) toWhereWithArguments(term interface{}) (where exql.
 		return
 	case *adapter.RawExpr:
 		r, v := Preprocess(t.Raw(), t.Arguments())
-		where.Conditions = []exql.Fragment{exql.RawValue(r)}
+		where.Conditions = []exql.Fragment{&exql.Raw{Value: r}}
 		args = append(args, v...)
 		return
 	case adapter.Constraints:
@@ -163,20 +161,31 @@ func (tu *templateWithUtils) toColumnValues(term interface{}) (cv exql.ColumnVal
 	case adapter.Constraint:
 		columnValue := exql.ColumnValue{}
 
-		// Getting column and operator.
-		if column, ok := t.Key().(string); ok {
-			chunks := strings.SplitN(strings.TrimSpace(column), " ", 2)
+		// TODO: Key and Value are similar. Can we refactor this? Maybe think about
+		// Left/Right rather than Key/Value.
+
+		switch key := t.Key().(type) {
+		case string:
+			chunks := strings.SplitN(strings.TrimSpace(key), " ", 2)
 			columnValue.Column = exql.ColumnWithName(chunks[0])
 			if len(chunks) > 1 {
 				columnValue.Operator = chunks[1]
 			}
-		} else {
-			if rawValue, ok := t.Key().(*adapter.RawExpr); ok {
-				columnValue.Column = exql.RawValue(rawValue.Raw())
-				args = append(args, rawValue.Arguments()...)
+		case *adapter.RawExpr:
+			columnValue.Column = &exql.Raw{Value: key.Raw()}
+			args = append(args, key.Arguments()...)
+		case *db.FuncExpr:
+			fnName, fnArgs := key.Name(), key.Arguments()
+			if len(fnArgs) == 0 {
+				fnName = fnName + "()"
 			} else {
-				columnValue.Column = exql.RawValue(fmt.Sprintf("%v", t.Key()))
+				fnName = fnName + "(?" + strings.Repeat(", ?", len(fnArgs)-1) + ")"
 			}
+			fnName, fnArgs = Preprocess(fnName, fnArgs)
+			columnValue.Column = &exql.Raw{Value: fnName}
+			args = append(args, fnArgs...)
+		default:
+			columnValue.Column = &exql.Raw{Value: fmt.Sprintf("%v", key)}
 		}
 
 		switch value := t.Value().(type) {
@@ -187,17 +196,17 @@ func (tu *templateWithUtils) toColumnValues(term interface{}) (cv exql.ColumnVal
 				fnName = fnName + "()"
 			} else {
 				// A function with one or more arguments.
-				fnName = fnName + "(?" + strings.Repeat("?, ", len(fnArgs)-1) + ")"
+				fnName = fnName + "(?" + strings.Repeat(", ?", len(fnArgs)-1) + ")"
 			}
 			fnName, fnArgs = Preprocess(fnName, fnArgs)
-			columnValue.Value = exql.RawValue(fnName)
+			columnValue.Value = &exql.Raw{Value: fnName}
 			args = append(args, fnArgs...)
 		case *db.RawExpr:
 			q, a := Preprocess(value.Raw(), value.Arguments())
-			columnValue.Value = exql.RawValue(q)
+			columnValue.Value = &exql.Raw{Value: q}
 			args = append(args, a...)
 		case driver.Valuer:
-			columnValue.Value = exql.RawValue("?")
+			columnValue.Value = sqlPlaceholder
 			args = append(args, value)
 		case *db.Comparison:
 			wrapper := &operatorWrapper{
@@ -210,7 +219,7 @@ func (tu *templateWithUtils) toColumnValues(term interface{}) (cv exql.ColumnVal
 			q, a = Preprocess(q, a)
 
 			columnValue = exql.ColumnValue{
-				Column: exql.RawValue(q),
+				Column: &exql.Raw{Value: q},
 			}
 			if a != nil {
 				args = append(args, a...)
@@ -229,7 +238,7 @@ func (tu *templateWithUtils) toColumnValues(term interface{}) (cv exql.ColumnVal
 			q, a = Preprocess(q, a)
 
 			columnValue = exql.ColumnValue{
-				Column: exql.RawValue(q),
+				Column: &exql.Raw{Value: q},
 			}
 			if a != nil {
 				args = append(args, a...)
@@ -249,7 +258,7 @@ func (tu *templateWithUtils) toColumnValues(term interface{}) (cv exql.ColumnVal
 	case *adapter.RawExpr:
 		columnValue := exql.ColumnValue{}
 		p, q := Preprocess(t.Raw(), t.Arguments())
-		columnValue.Column = exql.RawValue(p)
+		columnValue.Column = &exql.Raw{Value: p}
 		cv.ColumnValues = append(cv.ColumnValues, &columnValue)
 		args = append(args, q...)
 		return cv, args
@@ -294,7 +303,7 @@ func (tu *templateWithUtils) setColumnValues(term interface{}) (cv exql.ColumnVa
 			columnValue := exql.ColumnValue{
 				Column:   exql.ColumnWithName(column),
 				Operator: tu.AssignmentOperator,
-				Value:    exql.RawValue(format),
+				Value:    &exql.Raw{Value: format},
 			}
 
 			ps := strings.Count(format, "?")
@@ -313,7 +322,7 @@ func (tu *templateWithUtils) setColumnValues(term interface{}) (cv exql.ColumnVa
 	case *adapter.RawExpr:
 		columnValue := exql.ColumnValue{}
 		p, q := Preprocess(t.Raw(), t.Arguments())
-		columnValue.Column = exql.RawValue(p)
+		columnValue.Column = &exql.Raw{Value: p}
 		cv.ColumnValues = append(cv.ColumnValues, &columnValue)
 		args = append(args, q...)
 		return cv, args

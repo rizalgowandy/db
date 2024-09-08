@@ -27,9 +27,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,7 +50,11 @@ var defaultMapOptions = MapOptions{
 	IncludeNil:    false,
 }
 
-type compilable interface {
+type hasPaginator interface {
+	Paginator() (db.Paginator, error)
+}
+
+type isCompilable interface {
 	Compile() (string, error)
 	Arguments() []interface{}
 }
@@ -73,11 +75,7 @@ type fieldValue struct {
 }
 
 var (
-	reInvisibleChars = regexp.MustCompile(`[\s\r\n\t]+`)
-)
-
-var (
-	sqlPlaceholder = exql.RawValue(`?`)
+	sqlPlaceholder = &exql.Raw{Value: `?`}
 )
 
 var (
@@ -347,13 +345,22 @@ func Map(item interface{}, options *MapOptions) ([]string, []interface{}, error)
 }
 
 func columnFragments(columns []interface{}) ([]exql.Fragment, []interface{}, error) {
-	l := len(columns)
-	f := make([]exql.Fragment, l)
+	f := make([]exql.Fragment, len(columns))
 	args := []interface{}{}
 
-	for i := 0; i < l; i++ {
+	for i := range columns {
 		switch v := columns[i].(type) {
-		case compilable:
+		case hasPaginator:
+			p, err := v.Paginator()
+			if err != nil {
+				return nil, nil, err
+			}
+
+			q, a := Preprocess(p.String(), p.Arguments())
+
+			f[i] = &exql.Raw{Value: "(" + q + ")"}
+			args = append(args, a...)
+		case isCompilable:
 			c, err := v.Compile()
 			if err != nil {
 				return nil, nil, err
@@ -362,50 +369,77 @@ func columnFragments(columns []interface{}) ([]exql.Fragment, []interface{}, err
 			if _, ok := v.(db.Selector); ok {
 				q = "(" + q + ")"
 			}
-			f[i] = exql.RawValue(q)
+			f[i] = &exql.Raw{Value: q}
 			args = append(args, a...)
 		case *adapter.FuncExpr:
 			fnName, fnArgs := v.Name(), v.Arguments()
 			if len(fnArgs) == 0 {
 				fnName = fnName + "()"
 			} else {
-				fnName = fnName + "(?" + strings.Repeat("?, ", len(fnArgs)-1) + ")"
+				fnName = fnName + "(?" + strings.Repeat(", ?", len(fnArgs)-1) + ")"
 			}
 			fnName, fnArgs = Preprocess(fnName, fnArgs)
-			f[i] = exql.RawValue(fnName)
+			f[i] = &exql.Raw{Value: fnName}
 			args = append(args, fnArgs...)
 		case *adapter.RawExpr:
 			q, a := Preprocess(v.Raw(), v.Arguments())
-			f[i] = exql.RawValue(q)
+			f[i] = &exql.Raw{Value: q}
 			args = append(args, a...)
 		case exql.Fragment:
 			f[i] = v
 		case string:
 			f[i] = exql.ColumnWithName(v)
-		case int:
-			f[i] = exql.RawValue(fmt.Sprintf("%v", v))
-		case interface{}:
-			f[i] = exql.ColumnWithName(fmt.Sprintf("%v", v))
+		case fmt.Stringer:
+			f[i] = exql.ColumnWithName(v.String())
 		default:
-			return nil, nil, fmt.Errorf("unexpected argument type %T for Select() argument", v)
+			var err error
+			f[i], err = exql.NewRawValue(columns[i])
+			if err != nil {
+				return nil, nil, fmt.Errorf("unexpected argument type %T for Select() argument: %w", v, err)
+			}
 		}
 	}
 	return f, args, nil
 }
 
-func prepareQueryForDisplay(in string) (out string) {
-	j := 1
-	for i := range in {
+func prepareQueryForDisplay(in string) string {
+	out := make([]byte, 0, len(in))
+
+	offset := 0
+	whitespace := true
+	placeholders := 1
+
+	for i := 0; i < len(in); i++ {
+		if in[i] == ' ' || in[i] == '\r' || in[i] == '\n' || in[i] == '\t' {
+			if whitespace {
+				offset = i
+			} else {
+				whitespace = true
+				out = append(out, in[offset:i]...)
+				offset = i
+			}
+			continue
+		}
+		if whitespace {
+			whitespace = false
+			if len(out) > 0 {
+				out = append(out, ' ')
+			}
+			offset = i
+		}
 		if in[i] == '?' {
-			out = out + "$" + strconv.Itoa(j)
-			j++
-		} else {
-			out = out + string(in[i])
+			out = append(out, in[offset:i]...)
+			offset = i + 1
+
+			out = append(out, '$')
+			out = append(out, strconv.Itoa(placeholders)...)
+			placeholders++
 		}
 	}
-
-	out = reInvisibleChars.ReplaceAllString(out, ` `)
-	return strings.TrimSpace(out)
+	if !whitespace {
+		out = append(out, in[offset:]...)
+	}
+	return string(out)
 }
 
 func (iter *iterator) NextScan(dst ...interface{}) error {
@@ -541,7 +575,6 @@ type exprProxy struct {
 }
 
 func (p *exprProxy) Context() context.Context {
-	log.Printf("Missing context")
 	return context.Background()
 }
 

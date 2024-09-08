@@ -1,3 +1,4 @@
+//go:build !pq
 // +build !pq
 
 package postgresql
@@ -26,9 +27,11 @@ package postgresql
 import (
 	"context"
 	"database/sql"
-	_ "github.com/jackc/pgx/v4/stdlib"
-	"github.com/upper/db/v4/internal/sqladapter"
 	"time"
+
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/upper/db/v4"
+	"github.com/upper/db/v4/internal/sqladapter"
 )
 
 func (*database) OpenDSN(sess sqladapter.Session, dsn string) (*sql.DB, error) {
@@ -36,10 +39,16 @@ func (*database) OpenDSN(sess sqladapter.Session, dsn string) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if tz := connURL.Options["timezone"]; tz != "" {
-		loc, _ := time.LoadLocation(tz)
-		ctx := context.WithValue(sess.Context(), "timezone", loc)
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			return nil, err
+		}
+
+		ctx := context.WithValue(sess.Context(), db.ContextKey("timezone"), loc)
 		sess.SetContext(ctx)
 	}
+
 	return sql.Open("pgx", dsn)
 }
